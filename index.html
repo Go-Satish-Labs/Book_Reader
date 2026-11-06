@@ -8,6 +8,39 @@
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
+  <div id="loader" class="loader" role="status" aria-live="polite">
+    <div class="lglow" aria-hidden="true"></div>
+    <div class="lstage" aria-hidden="true">
+      <div class="lglyphs">
+        <b style="--x:-70px;--dx:-14px;--r:-18deg;--t:0s">A</b>
+        <b style="--x:-38px;--dx:10px;--r:12deg;--t:.7s;--s:14px">e</b>
+        <b style="--x:-8px;--dx:-6px;--r:-8deg;--t:1.5s;--s:20px">§</b>
+        <b style="--x:24px;--dx:16px;--r:20deg;--t:.3s;--s:15px">r</b>
+        <b style="--x:52px;--dx:-12px;--r:-14deg;--t:1.1s">T</b>
+        <b style="--x:76px;--dx:10px;--r:10deg;--t:2s;--s:13px">a</b>
+        <b style="--x:-54px;--dx:8px;--r:16deg;--t:2.4s;--s:16px">“</b>
+        <b style="--x:38px;--dx:-8px;--r:-12deg;--t:2.9s;--s:15px">o</b>
+      </div>
+      <div class="lfloat">
+        <div class="lbook">
+          <div class="lcover"></div>
+          <div class="lpg l"></div>
+          <div class="lpg r"></div>
+          <div class="leaf" style="--d:0s"><div class="f"></div><div class="b"></div></div>
+          <div class="leaf" style="--d:.6s"><div class="f"></div><div class="b"></div></div>
+          <div class="leaf" style="--d:1.2s"><div class="f"></div><div class="b"></div></div>
+          <div class="leaf" style="--d:1.8s"><div class="f"></div><div class="b"></div></div>
+          <div class="leaf" style="--d:2.4s"><div class="f"></div><div class="b"></div></div>
+          <div class="leaf" style="--d:3s"><div class="f"></div><div class="b"></div></div>
+          <div class="lspine"></div>
+        </div>
+      </div>
+    </div>
+    <p class="ltitle" id="ltitle">Immersive Book</p>
+    <p class="lname" id="lname"></p>
+    <div class="lbar ind" id="lbar"><span id="lfill"></span></div>
+    <div class="lmeta"><span id="lstat">Opening your library…</span><span class="lpct" id="lpct"></span></div>
+  </div>
   <div id="home">
     <div class="wrap">
       <header class="top">
@@ -57,6 +90,35 @@
     </div>
   </div>
   <div id="reader" role="dialog" aria-label="Book reader" hidden></div>
+  <script>
+    (function () {
+      var $ = function (id) { return document.getElementById(id); };
+      var loader = $("loader");
+      var shownAt = Date.now();
+
+      window.showLoader = function (title, name) {
+        shownAt = Date.now();
+        $("ltitle").textContent = title || "Immersive Book";
+        $("lname").textContent = name || "";
+        window.setLoader("Opening…", null);
+        loader.classList.remove("off");
+      };
+
+      window.setLoader = function (text, pct) {
+        $("lstat").textContent = text || "";
+        $("lbar").classList.toggle("ind", pct == null);
+        $("lfill").style.width = pct == null ? "" : Math.round(pct) + "%";
+        $("lpct").textContent = pct == null ? "" : Math.round(pct) + "%";
+      };
+
+      window.hideLoader = function () {
+        var wait = Math.max(0, 5000 - (Date.now() - shownAt));
+        setTimeout(function () { loader.classList.add("off"); }, wait);
+      };
+
+      window.addEventListener("load", window.hideLoader);
+    }());
+  </script>
   <script src="reader.js"></script>
   <script type="module" src="app.js"></script>
 </body>

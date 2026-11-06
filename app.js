@@ -67,15 +67,23 @@ async function openFile(file) {
   if (!file || busy) return;
   if (!detectKind(file.name)) return report("Unsupported file. Choose a PDF, DOCX or TXT file.", true);
   busy = true;
+  window.showLoader("Preparing your book", file.name);
   report(`Reading “${file.name}” on your device…`);
   try {
-    const book = await extractFile(file, m => report(m));
+    const book = await extractFile(file, m => {
+      report(m);
+      const progress = m.match(/^Reading page (\d+) of (\d+)/);
+      window.setLoader(m, progress ? (Number(progress[1]) / Number(progress[2])) * 100 : null);
+    });
+    window.setLoader("Opening your book…", 100);
     report("Ready.");
     showBook(book);
   } catch (e) {
     report(e.message, true);
+    window.setLoader("Could not open this file.", 0);
   } finally {
     busy = false;
+    window.hideLoader();
   }
 }
 
