@@ -50,7 +50,7 @@
   var SPREAD_MS = 6000;
   var LEVEL = [0.5, 0.8, 1.1];
   var DEFAULT_PREFS = { enabled: true, volume: 0.7, intensity: 1 };
-  var BUDGET = 650;
+  var BUDGET = 560;
   // Sound asset resolution order: embedded base64 (standalone export) -> local assets/ -> free-sound API -> synthesized fallback.
   // Populate FREE_SOUND_SOURCES with direct URLs to royalty-free WAV/MP3 files (e.g. Mixkit, Pixabay, Freesound CDN).
   var FREE_SOUND_SOURCES = {
@@ -482,27 +482,52 @@
     return !!m && typeof m.id === "string" && typeof m.title === "string" &&
       typeof m.page === "number" && isFinite(m.page) && m.page >= 0 && m.page <= last;
   }
+  var ZOOMS = [60, 75, 90, 100, 110, 125, 150, 175, 200];
+  var TEXT_RATIO = 0.72; // page width / height for text books
+  var TURN_MS = 800;
+
+  function loadView() {
+    var v = read("ib:view") || {};
+    return {
+      zoom: ZOOMS.indexOf(v.zoom) >= 0 ? v.zoom : 100,
+      layout: ["auto", "single", "double"].indexOf(v.layout) >= 0 ? v.layout : "auto",
+      fit: v.fit === "width" ? "width" : "page"
+    };
+  }
 
   function openReader(root, book, opts) {
     opts = opts || {};
-    var pages = Array.isArray(book.pdfPages) && book.pdfPages.length
+    var hasPdf = Array.isArray(book.pdfPages) && book.pdfPages.length > 0;
+    var pages = hasPdf
       ? book.pdfPages.map(function (p) {
-        return { chapter: "", image: p.image, blocks: p.text ? [{ p: p.text }] : [] };
+        return { chapter: "", image: p.image, w: p.w, h: p.h, blocks: p.text ? [{ p: p.text }] : [] };
       })
-      : paginate(book.text);
+      : paginate(book.text || "");
+    if (!pages.length) pages = [{ chapter: "", blocks: [{ p: "This document has no readable text." }] }];
+    var ratio = TEXT_RATIO;
+    if (hasPdf && pages[0].w && pages[0].h) ratio = Math.max(0.45, Math.min(1.6, pages[0].w / pages[0].h));
     var plan = buildPlan(pages.map(pageText));
-    var key = fingerprint(book.title, book.text);
+    var key = fingerprint(book.title, book.text || "");
     var last = Math.max(0, pages.length - 1);
     var engine = new SoundEngine(loadPrefs());
-    var st = { idx: 0, single: false, turn: null, panel: false, marks: [], fontSize: 18, zoom: 100, layout: "double", fit: "page" };
-    var els = {}, closed = true, unsubSound = null, keyHandler = null, resizeHandler = null, touchX = null, mouseHandler = null, hideTimer = null;
+    var view = loadView();
+    var st = { idx: 0, single: false, turn: null, panel: false, pop: null, marks: [], zoom: view.zoom, layout: view.layout, fit: view.fit };
+    var els = {}, closed = true, unsubSound = null, touchX = null, hideTimer = null, ro = null, turnTimer = null;
+    var viewRefresh = [];
+    var handlers = {};
 
     function clampIdx(p) { return Math.max(0, Math.min(p | 0, last)); }
     function cur() { return st.single ? st.idx : st.idx - (st.idx % 2); }
     function saveMarks() { store.saveMarks(key, st.marks); }
+    function saveView() { write("ib:view", { zoom: st.zoom, layout: st.layout, fit: st.fit }); }
     function fail(text) { global.alert(text); }
+    function wantSingle() {
+      if (st.layout === "single") return true;
+      if (st.layout === "double") return false;
+      return global.innerWidth < 820;
+    }
 
-    /* intro */
+    /* ----- intro ----- */
     function showIntro() {
       root.innerHTML = "";
       var saved = store.progress(key), resume = saved > 0 && saved <= last;
@@ -510,23 +535,25 @@
       root.appendChild(el("main", { className: "intro" }, [
         el("div", { className: "cover" }, [
           el("b", { text: book.title }),
-          el("span", { text: String(book.kind || "").toUpperCase() + " · " + pages.length + " pages" })
+          el("span", { text: String(book.kind || "").toUpperCase() + " · " + pages.length + (pages.length === 1 ? " page" : " pages") })
         ]),
-        el("h1", { text: book.title }),
-        el("p", { className: "muted", text: resume ? pct + "% read" : "Not started yet" }),
-        el("div", { className: "row" }, [
-          el("button", { className: "btn primary", type: "button", text: resume ? "CONTINUE READING" : "START READING",
+        el("h1", { className: "intro-title", text: book.title }),
+        el("p", { className: "muted", text: resume ? pct + "% read · page " + (saved + 1) + " of " + pages.length : "Not started yet" }),
+        el("div", { className: "row center" }, [
+          el("button", { className: "btn primary lg", type: "button", text: resume ? "Continue reading" : "Start reading",
             onclick: function () { start(resume ? saved : 0); } }),
-          resume ? el("button", { className: "btn", type: "button", text: "Start over", onclick: function () { start(0); } }) : null,
-          opts.onExport ? el("button", { className: "btn", type: "button", text: "Download standalone file", onclick: opts.onExport }) : null,
-          el("button", { className: "btn", type: "button", text: "Save reading data", onclick: saveData }),
-          el("button", { className: "btn", type: "button", text: "Load reading data", onclick: loadDataPick }),
-          opts.onBack ? el("button", { className: "btn", type: "button", text: "Back", onclick: opts.onBack }) : null
+          resume ? el("button", { className: "btn lg", type: "button", text: "Start over", onclick: function () { start(0); } }) : null
+        ]),
+        el("div", { className: "row center sub-actions" }, [
+          opts.onExport ? el("button", { className: "btn sm", type: "button", text: "Download standalone file", onclick: opts.onExport }) : null,
+          el("button", { className: "btn sm", type: "button", text: "Save reading data", onclick: saveData }),
+          el("button", { className: "btn sm", type: "button", text: "Load reading data", onclick: loadDataPick }),
+          opts.onBack ? el("button", { className: "btn sm", type: "button", text: "← Choose another file", onclick: opts.onBack }) : null
         ])
       ]));
     }
 
-    /* reading data: save, load, validate */
+    /* ----- reading data: save, load, validate ----- */
     function saveData() {
       var data = { format: "immersive-book-data", version: 1, bookKey: key,
         progress: store.progress(key), marks: store.marks(key) };
@@ -560,180 +587,269 @@
       showIntro();
     }
 
-    /* reader */
+    /* ----- reader lifecycle ----- */
     function start(page) {
       engine.init();
       closed = false;
       st.idx = clampIdx(page);
-      st.single = global.innerWidth < 820;
+      st.single = wantSingle();
       st.panel = false;
+      st.pop = null;
+      st.turn = null;
       st.marks = store.marks(key).filter(function (m) { return validMark(m, last); }).sort(byPage);
       buildReader();
-      unsubSound = engine.subscribe(function () { els.status.textContent = engine.status; });
-      keyHandler = function (e) {
+      unsubSound = engine.subscribe(function () { if (els.status) els.status.textContent = engine.status; });
+
+      handlers.key = function (e) {
         if (closed) return;
         var t = e.target;
         if (t && t.closest && t.closest("input,textarea,select")) return;
-        if (e.key === "ArrowRight" || e.key === "PageDown") go(1);
-        else if (e.key === "ArrowLeft" || e.key === "PageUp") go(-1);
-        else if (e.key === "Escape") { if (st.panel) { st.panel = false; render(); } else { closeReader(); } }
+        if (e.key === "ArrowRight" || e.key === "PageDown" || (e.key === " " && !e.shiftKey && !(t && t.closest && t.closest("button")))) { e.preventDefault(); go(1); }
+        else if (e.key === "ArrowLeft" || e.key === "PageUp" || (e.key === " " && e.shiftKey)) { e.preventDefault(); go(-1); }
+        else if (e.key === "Home") jump(0);
+        else if (e.key === "End") jump(last);
+        else if (e.key === "Escape") {
+          if (st.pop) { st.pop = null; updatePops(); }
+          else if (st.panel) { st.panel = false; render(); }
+          else if (!doc.fullscreenElement) closeReader();
+        }
       };
-      resizeHandler = function () {
-        var s = global.innerWidth < 820;
-        if (s !== st.single) { st.single = s; render(); }
+      handlers.resize = function () { applyLayoutMode(); };
+      handlers.down = function (e) {
+        if (!st.pop) return;
+        if (e.target.closest && e.target.closest(".popwrap")) return;
+        st.pop = null; updatePops();
       };
-      var hideTimer;
-      mouseHandler = function () {
-        root.classList.add("rbar-show");
-        clearTimeout(hideTimer);
-        hideTimer = setTimeout(function () { root.classList.remove("rbar-show"); }, 3000);
-      };
-      doc.addEventListener("mousemove", mouseHandler);
-      doc.addEventListener("keydown", keyHandler);
-      global.addEventListener("resize", resizeHandler);
-      mouseHandler();
+      handlers.fs = updateFsBtn;
+      doc.addEventListener("keydown", handlers.key);
+      doc.addEventListener("pointerdown", handlers.down);
+      doc.addEventListener("fullscreenchange", handlers.fs);
+      global.addEventListener("resize", handlers.resize);
+      if (global.ResizeObserver) { ro = new global.ResizeObserver(function () { layoutBook(); }); ro.observe(els.stage); }
       render();
+      layoutBook();
     }
     function teardown() {
       closed = true;
       engine.stop();
-      doc.removeEventListener("fullscreenchange", updateFsBtn);
-      if (mouseHandler) doc.removeEventListener("mousemove", mouseHandler);
-      if (hideTimer) clearTimeout(hideTimer);
+      clearTimeout(turnTimer);
+      if (ro) { ro.disconnect(); ro = null; }
       if (unsubSound) unsubSound();
-      if (keyHandler) doc.removeEventListener("keydown", keyHandler);
-      if (resizeHandler) global.removeEventListener("resize", resizeHandler);
-      keyHandler = resizeHandler = unsubSound = null;
+      doc.removeEventListener("keydown", handlers.key);
+      doc.removeEventListener("pointerdown", handlers.down);
+      doc.removeEventListener("fullscreenchange", handlers.fs);
+      global.removeEventListener("resize", handlers.resize);
+      unsubSound = null;
+      if (doc.fullscreenElement && doc.exitFullscreen) { try { doc.exitFullscreen(); } catch (e) { /* ignore */ } }
     }
-    function closeReader() { 
-      try { teardown(); } catch(e) {} 
-      if (opts && opts.onBack) { try { opts.onBack(); } catch(e) {} } 
-      else { try { showIntro(); } catch(e) {} } 
+    function closeReader() {
+      try { teardown(); } catch (e) { /* ignore */ }
+      showIntro();
     }
-
     function updateFsBtn() {
-      if (els.fullscreen) els.fullscreen.textContent = doc.fullscreenElement ? "Exit" : "Fullscreen";
+      if (els.fullscreen) els.fullscreen.textContent = doc.fullscreenElement ? "Exit full screen" : "Full screen";
+    }
+    function applyLayoutMode() {
+      if (closed) return;
+      var s = wantSingle();
+      if (s !== st.single) { st.single = s; st.turn = null; render(); }
+      layoutBook();
     }
 
+    /* ----- sound ----- */
     function setSound(p) {
       engine.setPrefs(Object.assign({}, engine.prefs, p));
-      els.enBtn.textContent = "Intelligent sound: " + (engine.prefs.enabled ? "on" : "off");
+      if (!els.enBtn) return;
+      els.enBtn.textContent = engine.prefs.enabled ? "On" : "Off";
       els.enBtn.setAttribute("aria-pressed", String(engine.prefs.enabled));
+      if (els.soundBtn) els.soundBtn.setAttribute("data-on", String(engine.prefs.enabled));
     }
     function option(v, label) { return el("option", { value: v, text: label }); }
 
+    /* ----- view controls ----- */
+    function refreshView() {
+      viewRefresh.forEach(function (f) { f(); });
+      layoutBook();
+    }
+    function seg(label, choices, get, set) {
+      var group = el("div", { className: "seg", role: "group", "aria-label": label });
+      var btns = choices.map(function (c) {
+        var b = el("button", { className: "btn sm", type: "button", text: c[1], onclick: function () { set(c[0]); refreshView(); } });
+        b._v = c[0];
+        group.appendChild(b);
+        return b;
+      });
+      viewRefresh.push(function () {
+        btns.forEach(function (b) { b.setAttribute("aria-pressed", String(get() === b._v)); });
+      });
+      return el("div", { className: "ctl" }, [el("span", { className: "lbl", text: label }), group]);
+    }
+    function setZoom(z) {
+      st.zoom = z; saveView();
+      if (els.zoomLbl) els.zoomLbl.textContent = z + "%";
+    }
+    function stepZoom(d) {
+      var i = ZOOMS.indexOf(st.zoom);
+      if (i < 0) i = ZOOMS.indexOf(100);
+      setZoom(ZOOMS[Math.max(0, Math.min(ZOOMS.length - 1, i + d))]);
+      layoutBook();
+    }
+    function updatePops() {
+      ["sound", "view"].forEach(function (n) {
+        var open = st.pop === n;
+        els["pop_" + n].hidden = !open;
+        els["btn_" + n].setAttribute("aria-expanded", String(open));
+      });
+    }
+    function togglePop(n) { st.pop = st.pop === n ? null : n; updatePops(); }
+    function popWrap(name, label, content) {
+      var btn = el("button", { className: "btn", type: "button", text: label, "aria-haspopup": "true", "aria-expanded": "false",
+        onclick: function () { togglePop(name); } });
+      var pop = el("div", { className: "pop", hidden: true }, content);
+      els["btn_" + name] = btn; els["pop_" + name] = pop;
+      return el("div", { className: "popwrap" }, [btn, pop]);
+    }
+
     function buildReader() {
       root.innerHTML = "";
+      viewRefresh = [];
+      els = {};
       els.book = el("div", { className: "book" });
-      els.panel = el("aside", { className: "marks", "aria-label": "Bookmarks" });
-      els.pos = el("span", { "aria-live": "polite" });
+      els.panel = el("aside", { className: "marks", "aria-label": "Bookmarks", hidden: true });
+      els.pos = el("span", { className: "poslbl", "aria-live": "polite" });
       els.prev = el("button", { className: "btn", type: "button", text: "‹ Previous", onclick: function () { go(-1); } });
       els.next = el("button", { className: "btn", type: "button", text: "Next ›", onclick: function () { go(1); } });
-      els.mark = el("button", { className: "btn", type: "button", text: "Bookmark", onclick: addMark });
-      els.marksBtn = el("button", { className: "btn", type: "button", onclick: function () { st.panel = !st.panel; render(); } });
-      els.fullscreen = el("button", { className: "btn", type: "button", text: "Fullscreen", onclick: function () {
-        if (doc.fullscreenElement) {
-          if (doc.exitFullscreen) doc.exitFullscreen();
-        } else if (root.requestFullscreen) {
-          root.requestFullscreen();
-        }
+      els.edgePrev = el("button", { className: "navbtn left", type: "button", "aria-label": "Previous page", text: "‹", onclick: function () { go(-1); } });
+      els.edgeNext = el("button", { className: "navbtn right", type: "button", "aria-label": "Next page", text: "›", onclick: function () { go(1); } });
+      els.mark = el("button", { className: "btn", type: "button", onclick: toggleMark });
+      els.marksBtn = el("button", { className: "btn", type: "button", onclick: function () { st.panel = !st.panel; st.pop = null; updatePops(); render(); } });
+      els.fullscreen = el("button", { className: "btn fsbtn", type: "button", text: "Full screen", onclick: function () {
+        if (doc.fullscreenElement) { if (doc.exitFullscreen) doc.exitFullscreen(); }
+        else if (root.requestFullscreen) root.requestFullscreen();
       } });
-      els.topEdge = el("div", { className: "top-edge" });
-      els.topEdge.addEventListener("mouseenter", function () { root.classList.add("rbar-show"); });
-      els.topEdge.addEventListener("mouseleave", function () { root.classList.remove("rbar-show"); });
-      els.enBtn = el("button", { className: "btn", type: "button", onclick: function () { setSound({ enabled: !engine.prefs.enabled }); } });
+      if (!root.requestFullscreen) els.fullscreen.hidden = true;
+      els.slider = el("input", { type: "range", className: "pager", min: "1", max: String(pages.length), step: "1", value: "1", "aria-label": "Go to page" });
+      els.slider.oninput = function () { els.pos.textContent = "Page " + els.slider.value + " of " + pages.length; };
+      els.slider.onchange = function () { jump(Number(els.slider.value) - 1); };
+
+      /* sound popover */
+      els.enBtn = el("button", { className: "btn sm", type: "button", onclick: function () { setSound({ enabled: !engine.prefs.enabled }); } });
       els.vol = el("input", { type: "range", min: "0", max: "1", step: "0.05", "aria-label": "Master volume",
         oninput: function () { setSound({ volume: Number(els.vol.value) }); } });
       els.vol.value = String(engine.prefs.volume);
       els.level = el("select", { "aria-label": "Sound intensity", onchange: function () { setSound({ intensity: Number(els.level.value) }); } },
         [option("0", "Subtle"), option("1", "Balanced"), option("2", "Immersive")]);
       els.level.value = String(engine.prefs.intensity);
-      els.zoom = el("select", { "aria-label": "Zoom", value: "100" },
-        [option("75", "75%"), option("90", "90%"), option("100", "100%"), option("110", "110%"), option("125", "125%")]);
-      els.status = el("span", { className: "status", "aria-live": "polite" });
-      setSound({});
+      els.status = el("p", { className: "status", "aria-live": "polite", text: engine.status });
+      var soundContent = [
+        el("div", { className: "ctl" }, [el("span", { className: "lbl", text: "Intelligent sound" }), els.enBtn]),
+        el("div", { className: "ctl" }, [el("span", { className: "lbl", text: "Volume" }), els.vol]),
+        el("div", { className: "ctl" }, [el("span", { className: "lbl", text: "Intensity" }), els.level]),
+        el("div", { className: "ctl" }, [el("span", { className: "lbl", text: "Playback" }),
+          el("button", { className: "btn sm", type: "button", text: "Stop sound", onclick: function () { engine.stop(); } })]),
+        els.status
+      ];
 
-      function adjFontSize(delta) {
-        st.fontSize = Math.max(16, Math.min(22, st.fontSize + delta));
-        els.book.style.fontSize = st.fontSize + "px";
-        render();
-      }
-      function applyZoom() {
-        els.book.style.zoom = (st.zoom / 100) + "";
-      }
-      function applyFit() {
-        if (st.fit === "page") {
-          els.book.style.width = "auto";
-          els.book.style.height = "auto";
-          els.book.style.transform = "";
-        } else {
-          els.book.style.width = "100%";
-          els.book.style.height = "auto";
-          els.book.style.transform = "";
-        }
-      }
+      /* view popover */
+      els.zoomLbl = el("span", { className: "zoomlbl", text: st.zoom + "%" });
+      var viewContent = [
+        el("div", { className: "ctl" }, [el("span", { className: "lbl", text: "Zoom" }),
+          el("div", { className: "seg" }, [
+            el("button", { className: "btn sm", type: "button", "aria-label": "Zoom out", text: "−", onclick: function () { stepZoom(-1); } }),
+            els.zoomLbl,
+            el("button", { className: "btn sm", type: "button", "aria-label": "Zoom in", text: "+", onclick: function () { stepZoom(1); } }),
+            el("button", { className: "btn sm", type: "button", text: "Reset", onclick: function () { setZoom(100); layoutBook(); } })
+          ])]),
+        seg("Pages", [["auto", "Auto"], ["single", "Single"], ["double", "Spread"]],
+          function () { return st.layout; }, function (v) { st.layout = v; saveView(); applyLayoutMode(); }),
+        seg("Fit", [["page", "Whole page"], ["width", "Page width"]],
+          function () { return st.fit; }, function (v) { st.fit = v; saveView(); }),
+        seg("Theme", [["day", "Day"], ["night", "Night"]],
+          function () { return read("ib:theme") === "night" ? "night" : "day"; },
+          function (v) { if ((read("ib:theme") === "night" ? "night" : "day") !== v) toggleTheme(); })
+      ];
 
-      els.stage = el("div", { className: "stage" }, [els.book, els.panel]);
+      els.soundWrap = popWrap("sound", "Sound", soundContent);
+      els.soundBtn = els.btn_sound;
+      var viewWrap = popWrap("view", "View", viewContent);
+
+      els.stage = el("div", { className: "stage" }, [els.book]);
       els.stage.addEventListener("click", onStageClick);
       els.stage.addEventListener("touchstart", function (e) { touchX = e.touches[0].clientX; }, { passive: true });
       els.stage.addEventListener("touchend", function (e) {
         if (touchX === null) return;
         var d = e.changedTouches[0].clientX - touchX;
         touchX = null;
-        if (Math.abs(d) > 50) go(d < 0 ? 1 : -1);
+        if (Math.abs(d) > 60) go(d < 0 ? 1 : -1);
       }, { passive: true });
 
       root.appendChild(el("div", { className: "reader" }, [
-        el("div", { className: "rbar" }, [
-          el("button", { className: "btn", type: "button", text: "Close", onclick: closeReader }),
-          el("div", { className: "t", text: book.title }),
-          el("div", { className: "row soundbar" }, [els.enBtn, el("label", null, ["Vol ", els.vol]),
-            el("label", null, ["Int ", els.level]),
-            el("button", { className: "btn", type: "button", text: "Stop", onclick: function () { engine.stop(); } }), els.status]),
-          el("div", { className: "row readctrl" }, [
-            el("button", { className: "btn", type: "button", text: "A−", title: "Decrease font size", onclick: function () { adjFontSize(-2); } }),
-            el("button", { className: "btn", type: "button", text: "A+", title: "Increase font size", onclick: function () { adjFontSize(2); } }),
-            el("select", { "aria-label": "Zoom", onchange: function () { st.zoom = Number(els.zoom.value); applyZoom(); } },
-              [option("75", "75%"), option("90", "90%"), option("100", "100%"), option("110", "110%"), option("125", "125%")]),
-            el("button", { className: "btn", type: "button", text: st.layout === "single" ? "Double" : "Single", onclick: function () { st.layout = st.layout === "single" ? "double" : "single"; st.single = st.layout === "single"; render(); } }),
-            el("button", { className: "btn", type: "button", text: st.fit === "page" ? "Fit Width" : "Fit Page", onclick: function () { st.fit = st.fit === "page" ? "width" : "page"; applyFit(); } })
-          ]),
-          el("div", { className: "row" }, [els.mark, els.marksBtn, els.fullscreen])
+        el("header", { className: "rbar" }, [
+          el("button", { className: "btn", type: "button", text: "← Close", onclick: closeReader }),
+          el("div", { className: "t", title: book.title, text: book.title }),
+          el("div", { className: "row actions" }, [els.mark, els.marksBtn, els.soundWrap, viewWrap, els.fullscreen])
         ]),
-        els.topEdge,
-        els.stage,
-        el("div", { className: "rfoot" }, [els.prev, els.pos, els.next])
+        el("div", { className: "stagewrap" }, [els.stage, els.edgePrev, els.edgeNext, els.panel]),
+        el("footer", { className: "rfoot" }, [els.prev, el("div", { className: "pagerwrap" }, [els.slider, els.pos]), els.next])
       ]));
+
+      setSound({});
+      refreshView();
+      updatePops();
     }
 
-    function pageNode(page, num) {
+    /* ----- layout: size the book to the stage so nothing is ever clipped ----- */
+    function layoutBook() {
+      if (closed || !els.stage || !els.book) return;
+      var cw = els.stage.clientWidth, chh = els.stage.clientHeight;
+      if (!cw || !chh) return;
+      var padX = cw < 600 ? 10 : 64, padY = cw < 600 ? 10 : 24;
+      els.stage.style.padding = padY + "px " + padX + "px";
+      var aw = Math.max(140, cw - padX * 2), ah = Math.max(180, chh - padY * 2);
+      var cols = st.single ? 1 : 2;
+      var h = st.fit === "width" ? aw / (cols * ratio) : Math.min(ah, aw / (cols * ratio));
+      h = Math.max(200, h * st.zoom / 100);
+      var w = h * ratio;
+      els.book.style.width = Math.round(w * cols) + "px";
+      els.book.style.height = Math.round(h) + "px";
+      els.book.style.fontSize = Math.max(10, w * 0.042).toFixed(2) + "px";
+    }
+
+    /* ----- pages ----- */
+    function pageNode(i) {
+      var page = pages[i];
+      if (!page || i < 0) return el("div", { className: "pg blank" });
       var kids = [];
-      if (page) {
-        if (page.image) {
-          kids.push(el("img", {
-            className: "pdf-page-image", src: page.image, alt: "Page " + num,
-            loading: "lazy", decoding: "async"
-          }));
-        } else {
-          page.blocks.forEach(function (b) { kids.push(b.h != null ? el("h3", { text: b.h }) : el("p", { text: b.p })); });
-        }
-        kids.push(el("span", { className: "n", text: String(num) }));
+      if (page.image) {
+        kids.push(el("img", { className: "pdf-page-image", src: page.image, alt: "Page " + (i + 1), decoding: "async", draggable: "false" }));
+      } else {
+        page.blocks.forEach(function (b) { kids.push(b.h != null ? el("h3", { text: b.h }) : el("p", { text: b.p })); });
+        kids.push(el("span", { className: "n", text: String(i + 1) }));
       }
-      return el("div", { className: "pg" + (page && page.image ? " pdf-page" : "") }, kids);
+      return el("div", { className: "pg" + (page.image ? " pdf-page" : "") }, kids);
     }
+    function drawBook(left, right) {
+      els.book.textContent = "";
+      els.book.appendChild(pageNode(left));
+      if (!st.single) els.book.appendChild(pageNode(right));
+    }
+    function marked(c) { return st.marks.some(function (m) { return m.page === c; }); }
 
-    function render() {
+    function render(anim) {
       if (closed) return;
       var c = cur(), step = st.single ? 1 : 2;
-      els.book.className = "book" + (st.single ? " single" : "") + (st.turn ? " turn-" + st.turn : "");
-      els.book.textContent = "";
-      els.book.appendChild(pageNode(pages[c], c + 1));
-      if (!st.single) els.book.appendChild(pageNode(pages[c + 1], c + 2));
+      els.book.className = "book" + (st.single ? " single" : "") + (anim ? " anim-" + anim : "");
+      drawBook(c, c + 1);
       var shown = st.single ? c + 1 : Math.min(c + 2, pages.length), ch = pages[c] && pages[c].chapter;
-      els.pos.textContent = "Page " + (c + 1) + (st.single ? "" : "–" + shown) + " of " + pages.length + (ch ? " · " + ch : "");
-      els.prev.disabled = c === 0 || !!st.turn;
-      els.next.disabled = c + step > last || !!st.turn;
-      els.mark.setAttribute("aria-pressed", String(st.marks.some(function (m) { return m.page === c; })));
+      els.pos.textContent = "Page " + (c + 1) + (st.single || shown === c + 1 ? "" : "–" + shown) + " of " + pages.length + (ch ? " · " + ch : "");
+      els.slider.value = String(c + 1);
+      els.prev.disabled = c === 0;
+      els.next.disabled = c + step > last;
+      els.edgePrev.hidden = c === 0;
+      els.edgeNext.hidden = c + step > last;
+      var isMarked = marked(c);
+      els.mark.textContent = isMarked ? "Bookmarked ✓" : "Bookmark";
+      els.mark.setAttribute("aria-pressed", String(isMarked));
       els.marksBtn.textContent = "Bookmarks (" + st.marks.length + ")";
       els.marksBtn.setAttribute("aria-expanded", String(st.panel));
       els.panel.hidden = !st.panel;
@@ -747,66 +863,79 @@
       if (closed || st.turn) return;
       var c = cur(), step = st.single ? 1 : 2, n = c + dir * step;
       if (n < 0 || n > last) return;
-      if (st.single || reduceMotion()) { st.idx = n; render(); return; }
+      jump(n, dir);
+    }
 
+    function jump(n, dir) {
+      if (closed || st.turn) return;
+      n = clampIdx(n);
+      var target = st.single ? n : n - (n % 2), c = cur();
+      if (target === c) return;
+      dir = dir || (target > c ? 1 : -1);
+      var adjacent = Math.abs(target - c) === (st.single ? 1 : 2);
+      if (reduceMotion() || !adjacent) { st.idx = target; render(); return; }
+      if (st.single) { st.idx = target; render(dir > 0 ? "next" : "prev"); return; }
+
+      /* two-page spread: draw the pages that will be revealed underneath, then flip one leaf over them */
       st.turn = dir > 0 ? "next" : "prev";
-      render();
-
-      var bk = els.book, lf = el("div", { className: "lf" });
+      els.book.className = "book";
+      els.stage.style.overflow = "hidden"; // the flipping leaf swings past the book edge: no scrollbar flicker
+      els.prev.disabled = els.next.disabled = true;
+      var lf = el("div", { className: "lf" });
       if (dir > 0) {
-        lf.style.left = "50%";
-        lf.style.transformOrigin = "left center";
-        lf.appendChild(pageNode(pages[c + 1], c + 2));
-        var back = pageNode(pages[c + 2], c + 3);
-        back.style.transform = "rotateY(180deg)";
-        back.style.backfaceVisibility = "hidden";
-        lf.appendChild(back);
+        drawBook(c, c + 3);
+        lf.style.left = "50%"; lf.style.transformOrigin = "left center";
+        lf.appendChild(pageNode(c + 1));
+        lf.appendChild(pageNode(c + 2));
       } else {
-        lf.style.left = "0";
-        lf.style.transformOrigin = "right center";
-        lf.appendChild(pageNode(pages[c], c + 1));
-        var back = pageNode(pages[c - 1], c);
-        back.style.transform = "rotateY(180deg)";
-        back.style.backfaceVisibility = "hidden";
-        lf.appendChild(back);
+        drawBook(c - 2, c + 1);
+        lf.style.left = "0"; lf.style.transformOrigin = "right center";
+        lf.appendChild(pageNode(c));
+        lf.appendChild(pageNode(c - 1));
       }
-
-      lf.style.transform = "rotateY(0deg)";
-      bk.appendChild(lf);
-      lf.getBoundingClientRect();
+      els.book.appendChild(lf);
+      lf.getBoundingClientRect(); // commit start state before animating
       lf.style.transform = "rotateY(" + (dir > 0 ? -180 : 180) + "deg)";
-
-      setTimeout(function () {
+      turnTimer = setTimeout(function () {
         if (closed) return;
-        st.idx = n; st.turn = null;
+        st.idx = target; st.turn = null;
+        els.stage.style.overflow = "";
         render();
-      }, 820);
+      }, TURN_MS + 30);
     }
 
     function onStageClick(e) {
       if (closed || !e.target.closest(".pg")) return;
+      var sel = global.getSelection && global.getSelection();
+      if (sel && String(sel).length) return; // user is selecting text
       var b = els.book.getBoundingClientRect();
       if (!b.width) return;
       var x = (e.clientX - b.left) / b.width;
-      if (x > 0.8 || (st.single && x > 0.5)) go(1);
-      else if (x < 0.2 || (st.single && x <= 0.5)) go(-1);
+      if (st.single) { if (x > 0.66) go(1); else if (x < 0.34) go(-1); }
+      else if (x > 0.85) go(1);
+      else if (x < 0.15) go(-1);
     }
 
-    function addMark() {
-      var c = cur(), ch = pages[c] && pages[c].chapter;
-      st.marks.push({ id: newId(), page: c, title: "Page " + (c + 1) + (ch ? " – " + ch : ""),
-        note: "", createdAt: Date.now() });
-      st.marks.sort(byPage);
+    /* ----- bookmarks ----- */
+    function toggleMark() {
+      var c = cur();
+      if (marked(c)) st.marks = st.marks.filter(function (m) { return m.page !== c; });
+      else {
+        var ch = pages[c] && pages[c].chapter;
+        st.marks.push({ id: newId(), page: c, title: "Page " + (c + 1) + (ch ? " – " + ch : ""), note: "", createdAt: Date.now() });
+        st.marks.sort(byPage);
+      }
       saveMarks();
-      st.panel = true;
       render();
     }
 
     function renderPanel() {
       els.panel.textContent = "";
-      els.panel.appendChild(el("h3", { text: "Bookmarks" }));
-      els.panel.appendChild(el("button", { className: "btn", type: "button", text: "Bookmark this page", onclick: addMark }));
-      if (!st.marks.length) els.panel.appendChild(el("p", { className: "muted", text: "No bookmarks yet." }));
+      els.panel.appendChild(el("div", { className: "panelhead" }, [
+        el("h3", { text: "Bookmarks" }),
+        el("button", { className: "btn sm", type: "button", text: "Close", onclick: function () { st.panel = false; render(); } })
+      ]));
+      if (!st.marks.length) els.panel.appendChild(el("p", { className: "muted", text: "No bookmarks yet. Use “Bookmark” in the top bar to save your place." }));
       st.marks.forEach(function (m) {
         var title = el("input", { "aria-label": "Bookmark title", maxlength: "80", value: m.title });
         var note = el("textarea", { "aria-label": "Bookmark note", rows: "2", maxlength: "400", placeholder: "Add a note" });
@@ -818,9 +947,9 @@
           el("small", { text: "Page " + (m.page + 1) + " · " + new Date(m.createdAt).toLocaleDateString() }),
           note,
           el("div", { className: "row" }, [
-            el("button", { className: "btn", type: "button", text: "Open", onclick: function () {
-              st.idx = m.page; st.panel = false; render(); } }),
-            el("button", { className: "btn", type: "button", text: "Delete", onclick: function () {
+            el("button", { className: "btn sm", type: "button", text: "Open", onclick: function () {
+              st.panel = false; st.idx = m.page; render(); } }),
+            el("button", { className: "btn sm", type: "button", text: "Delete", onclick: function () {
               st.marks = st.marks.filter(function (x) { return x !== m; }); saveMarks(); render(); } })
           ])
         ]));
@@ -830,6 +959,7 @@
     applyTheme();
     showIntro();
   }
+
 
   global.IB = {
     paginate: paginate,

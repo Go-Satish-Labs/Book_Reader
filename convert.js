@@ -20,9 +20,11 @@ function loadMammoth() {
     mammothPromise = new Promise((resolve, reject) => {
       const s = document.createElement("script");
       s.src = "./mammoth.browser.min.js";
+      s.async = true;
       s.onload = () => resolve(globalThis.mammoth);
       s.onerror = () => reject(new Error("Could not load the Word reader."));
-      }).catch(function (e) {
+      document.head.appendChild(s); // the original never attached the script, so DOCX files could not open
+    }).catch(function (e) {
       mammothPromise = null;
       throw e;
     });
@@ -81,14 +83,21 @@ export async function extractFile(file, onProgress = () => {}) {
 
   let out = "";
   const pdfPages = [];
-  const dpr = Math.min(globalThis.devicePixelRatio || 1, 2);
+  // Render each page at a fixed, sensible width as JPEG. The old code used PNG at 2-4x scale,
+  // which used huge amounts of memory and made exported books enormous.
+  const TARGET_W = 1100 * Math.min(globalThis.devicePixelRatio || 1, 1.5);
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i);
-    const viewport = page.getViewport({ scale: 2.0 * dpr });
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.max(0.8, Math.min(3, TARGET_W / base.width));
+    const viewport = page.getViewport({ scale });
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(viewport.width);
     canvas.height = Math.ceil(viewport.height);
-    await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff"; // JPEG has no transparency: avoid black pages
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport }).promise;
     const content = await page.getTextContent();
     let line = "";
     let last = null;
@@ -100,8 +109,12 @@ export async function extractFile(file, onProgress = () => {}) {
     }
     const pageText = line.trim();
     out += pageText + "\n\n";
-    pdfPages.push({ image: canvas.toDataURL("image/png"), text: pageText });
+    pdfPages.push({ image: canvas.toDataURL("image/jpeg", 0.85), w: canvas.width, h: canvas.height, text: pageText });
+    canvas.width = canvas.height = 0; // release the bitmap
+    page.cleanup();
     onProgress(`Reading page ${i} of ${doc.numPages}…`);
+    if (i % 3 === 0) await new Promise(r => setTimeout(r, 0)); // let the page repaint the progress text
   }
+  try { doc.destroy(); } catch { /* ignore */ }
   return { title, kind, text: out.replace(/ +\n/g, "\n"), pdfPages };
 }
