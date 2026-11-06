@@ -51,6 +51,11 @@
   var LEVEL = [0.5, 0.8, 1.1];
   var DEFAULT_PREFS = { enabled: true, volume: 0.7, intensity: 1 };
   var BUDGET = 650;
+  // Sound asset resolution order: embedded base64 (standalone export) -> local assets/ -> free-sound API -> synthesized fallback.
+  // Populate FREE_SOUND_SOURCES with direct URLs to royalty-free WAV/MP3 files (e.g. Mixkit, Pixabay, Freesound CDN).
+  var FREE_SOUND_SOURCES = {
+    rain: [], wind: [], sea: [], fire: [], night: [], stream: []
+  };
 
   /* ---------- storage (localStorage only) ---------- */
   function read(k) {
@@ -98,6 +103,13 @@
     setTimeout(function () { global.URL.revokeObjectURL(url); }, 1000);
   }
   function reduceMotion() { return !!(global.matchMedia && global.matchMedia("(prefers-reduced-motion: reduce)").matches); }
+  function b64ToBuffer(base64) {
+    var b64 = String(base64);
+    if (b64.indexOf(",") >= 0) b64 = b64.split(",")[1];
+    var bin = atob(b64), buf = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    return buf;
+  }
 
   /* ---------- theme ---------- */
   function applyTheme() {
@@ -277,7 +289,47 @@
     this.timers.forEach(function (t) { clearTimeout(t); });
     this.timers = [];
   };
+  SoundEngine.prototype.resolveSoundAsset = function (name) {
+    var assets = global.IB_SOUND_ASSETS || {};
+    if (assets[name]) return assets[name];
+    return "assets/" + name + ".wav";
+  };
+  SoundEngine.prototype.fetchSoundBuffer = function (url) {
+    var self = this;
+    return new Promise(function (res, rej) {
+      try {
+        if (String(url).indexOf("data:") === 0) {
+          self.ctx.decodeAudioData(b64ToBuffer(url).buffer).then(res, rej);
+        } else {
+          fetch(url).then(function (r) {
+            if (!r.ok) throw new Error("Asset not found: " + url);
+            return r.arrayBuffer();
+          }).then(function (ab) {
+            self.ctx.decodeAudioData(ab).then(res, rej);
+          }, rej);
+        }
+      } catch (e) { rej(e); }
+    });
+  };
+  SoundEngine.prototype.loadAmbienceBuffer = function (k) {
+    var self = this;
+    var name = k === "storm" ? "rain" : k;
+    var attempts = [];
+    var assets = global.IB_SOUND_ASSETS || {};
+    if (assets[name]) attempts.push(function () { return self.fetchSoundBuffer(assets[name]); });
+    attempts.push(function () { return self.fetchSoundBuffer("assets/" + name + ".wav"); });
+    (FREE_SOUND_SOURCES[name] || []).forEach(function (url) {
+      attempts.push(function () { return self.fetchSoundBuffer(url); });
+    });
+    var i = 0;
+    function next() {
+      if (i >= attempts.length) return Promise.reject(new Error("no ambience asset for " + name));
+      return attempts[i++]().catch(function () { return next(); });
+    }
+    return next();
+  };
   SoundEngine.prototype.setAmbience = function (k) {
+    var self = this;
     if (this.amb) this.fadeOut(this.amb);
     this.amb = null;
     this.ambKey = k;
@@ -285,25 +337,21 @@
     var ctx = this.ctx, gain = ctx.createGain();
     gain.gain.value = 0;
     gain.connect(this.master);
-    var stops = [];
-    var assets = Object.assign({
-      rain: "assets/rain.wav", storm: "assets/rain.wav", wind: "assets/wind.wav",
-      desert: "assets/wind.wav", city: "assets/wind.wav", farm: "assets/wind.wav",
-      forest: "assets/wind.wav", indoor: "assets/fire.wav", sea: "assets/sea.wav",
-      fire: "assets/fire.wav", night: "assets/night.wav", stream: "assets/stream.wav"
-    }, global.IB_SOUND_ASSETS || {});
-    var assetKey = k === "storm" ? "rain" : k;
-    if (assets[assetKey]) {
-      var audio = new global.Audio(assets[assetKey]);
-      audio.loop = true;
-      audio.volume = Math.min(1, this.level());
-      audio.play().catch(function () {});
-      stops.push(function () { audio.pause(); audio.currentTime = 0; });
-    } else {
-      this.buildAmbience(k, gain, stops);
-    }
-    gain.gain.setTargetAtTime(0.9, ctx.currentTime, 0.7);
-    this.amb = { gain: gain, stops: stops };
+    this.loadAmbienceBuffer(k).then(function (buf) {
+      if (self.ambKey !== k) return;
+      var node = ctx.createBufferSource();
+      node.buffer = buf;
+      node.loop = true;
+      node.connect(gain);
+      node.start(0);
+      gain.gain.setTargetAtTime(self.level(), ctx.currentTime, 0.7);
+      self.amb = { gain: gain, stops: [function () { node.stop(); node.disconnect(); }] };
+      self.emit(k ? "Environment: " + SCENES[k].label + " · Playing: " + SCENES[k].sound : "Environment: quiet · no sound matched");
+    }, function () {
+      self.buildAmbience(k, gain, []);
+      gain.gain.setTargetAtTime(self.level(), ctx.currentTime, 0.7);
+      self.amb = { gain: gain, stops: [] };
+    });
   };
   SoundEngine.prototype.fadeOut = function (a) {
     var ctx = this.ctx;
@@ -446,8 +494,8 @@
     var key = fingerprint(book.title, book.text);
     var last = Math.max(0, pages.length - 1);
     var engine = new SoundEngine(loadPrefs());
-    var st = { idx: 0, single: false, turn: null, panel: false, marks: [] };
-    var els = {}, closed = true, unsubSound = null, keyHandler = null, resizeHandler = null, touchX = null;
+    var st = { idx: 0, single: false, turn: null, panel: false, marks: [], fontSize: 18, zoom: 100, layout: "double", fit: "page" };
+    var els = {}, closed = true, unsubSound = null, keyHandler = null, resizeHandler = null, touchX = null, mouseHandler = null, hideTimer = null;
 
     function clampIdx(p) { return Math.max(0, Math.min(p | 0, last)); }
     function cur() { return st.single ? st.idx : st.idx - (st.idx % 2); }
@@ -528,25 +576,44 @@
         if (t && t.closest && t.closest("input,textarea,select")) return;
         if (e.key === "ArrowRight" || e.key === "PageDown") go(1);
         else if (e.key === "ArrowLeft" || e.key === "PageUp") go(-1);
-        else if (e.key === "Escape" && st.panel) { st.panel = false; render(); }
+        else if (e.key === "Escape") { if (st.panel) { st.panel = false; render(); } else { closeReader(); } }
       };
       resizeHandler = function () {
         var s = global.innerWidth < 820;
         if (s !== st.single) { st.single = s; render(); }
       };
+      var hideTimer;
+      mouseHandler = function () {
+        root.classList.add("rbar-show");
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(function () { root.classList.remove("rbar-show"); }, 3000);
+      };
+      doc.addEventListener("mousemove", mouseHandler);
       doc.addEventListener("keydown", keyHandler);
       global.addEventListener("resize", resizeHandler);
+      mouseHandler();
       render();
     }
     function teardown() {
       closed = true;
       engine.stop();
+      doc.removeEventListener("fullscreenchange", updateFsBtn);
+      if (mouseHandler) doc.removeEventListener("mousemove", mouseHandler);
+      if (hideTimer) clearTimeout(hideTimer);
       if (unsubSound) unsubSound();
       if (keyHandler) doc.removeEventListener("keydown", keyHandler);
       if (resizeHandler) global.removeEventListener("resize", resizeHandler);
       keyHandler = resizeHandler = unsubSound = null;
     }
-    function closeReader() { teardown(); showIntro(); }
+    function closeReader() { 
+      try { teardown(); } catch(e) {} 
+      if (opts && opts.onBack) { try { opts.onBack(); } catch(e) {} } 
+      else { try { showIntro(); } catch(e) {} } 
+    }
+
+    function updateFsBtn() {
+      if (els.fullscreen) els.fullscreen.textContent = doc.fullscreenElement ? "Exit" : "Fullscreen";
+    }
 
     function setSound(p) {
       engine.setPrefs(Object.assign({}, engine.prefs, p));
@@ -571,6 +638,9 @@
           root.requestFullscreen();
         }
       } });
+      els.topEdge = el("div", { className: "top-edge" });
+      els.topEdge.addEventListener("mouseenter", function () { root.classList.add("rbar-show"); });
+      els.topEdge.addEventListener("mouseleave", function () { root.classList.remove("rbar-show"); });
       els.enBtn = el("button", { className: "btn", type: "button", onclick: function () { setSound({ enabled: !engine.prefs.enabled }); } });
       els.vol = el("input", { type: "range", min: "0", max: "1", step: "0.05", "aria-label": "Master volume",
         oninput: function () { setSound({ volume: Number(els.vol.value) }); } });
@@ -578,8 +648,30 @@
       els.level = el("select", { "aria-label": "Sound intensity", onchange: function () { setSound({ intensity: Number(els.level.value) }); } },
         [option("0", "Subtle"), option("1", "Balanced"), option("2", "Immersive")]);
       els.level.value = String(engine.prefs.intensity);
+      els.zoom = el("select", { "aria-label": "Zoom", value: "100" },
+        [option("75", "75%"), option("90", "90%"), option("100", "100%"), option("110", "110%"), option("125", "125%")]);
       els.status = el("span", { className: "status", "aria-live": "polite" });
       setSound({});
+
+      function adjFontSize(delta) {
+        st.fontSize = Math.max(16, Math.min(22, st.fontSize + delta));
+        els.book.style.fontSize = st.fontSize + "px";
+        render();
+      }
+      function applyZoom() {
+        els.book.style.zoom = (st.zoom / 100) + "";
+      }
+      function applyFit() {
+        if (st.fit === "page") {
+          els.book.style.width = "auto";
+          els.book.style.height = "auto";
+          els.book.style.transform = "";
+        } else {
+          els.book.style.width = "100%";
+          els.book.style.height = "auto";
+          els.book.style.transform = "";
+        }
+      }
 
       els.stage = el("div", { className: "stage" }, [els.book, els.panel]);
       els.stage.addEventListener("click", onStageClick);
@@ -595,13 +687,22 @@
         el("div", { className: "rbar" }, [
           el("button", { className: "btn", type: "button", text: "Close", onclick: closeReader }),
           el("div", { className: "t", text: book.title }),
+          el("div", { className: "row soundbar" }, [els.enBtn, el("label", null, ["Vol ", els.vol]),
+            el("label", null, ["Int ", els.level]),
+            el("button", { className: "btn", type: "button", text: "Stop", onclick: function () { engine.stop(); } }), els.status]),
+          el("div", { className: "row readctrl" }, [
+            el("button", { className: "btn", type: "button", text: "A−", title: "Decrease font size", onclick: function () { adjFontSize(-2); } }),
+            el("button", { className: "btn", type: "button", text: "A+", title: "Increase font size", onclick: function () { adjFontSize(2); } }),
+            el("select", { "aria-label": "Zoom", onchange: function () { st.zoom = Number(els.zoom.value); applyZoom(); } },
+              [option("75", "75%"), option("90", "90%"), option("100", "100%"), option("110", "110%"), option("125", "125%")]),
+            el("button", { className: "btn", type: "button", text: st.layout === "single" ? "Double" : "Single", onclick: function () { st.layout = st.layout === "single" ? "double" : "single"; st.single = st.layout === "single"; render(); } }),
+            el("button", { className: "btn", type: "button", text: st.fit === "page" ? "Fit Width" : "Fit Page", onclick: function () { st.fit = st.fit === "page" ? "width" : "page"; applyFit(); } })
+          ]),
           el("div", { className: "row" }, [els.mark, els.marksBtn, els.fullscreen])
         ]),
+        els.topEdge,
         els.stage,
-        el("div", { className: "rfoot" }, [els.prev, els.pos, els.next]),
-        el("div", { className: "rfoot sub soundbar" }, [els.enBtn, el("label", null, ["Volume ", els.vol]),
-          el("label", null, ["Intensity ", els.level]),
-          el("button", { className: "btn", type: "button", text: "Stop sound", onclick: function () { engine.stop(); } }), els.status])
+        el("div", { className: "rfoot" }, [els.prev, els.pos, els.next])
       ]));
     }
 
@@ -647,13 +748,39 @@
       var c = cur(), step = st.single ? 1 : 2, n = c + dir * step;
       if (n < 0 || n > last) return;
       if (st.single || reduceMotion()) { st.idx = n; render(); return; }
+
       st.turn = dir > 0 ? "next" : "prev";
       render();
+
+      var bk = els.book, lf = el("div", { className: "lf" });
+      if (dir > 0) {
+        lf.style.left = "50%";
+        lf.style.transformOrigin = "left center";
+        lf.appendChild(pageNode(pages[c + 1], c + 2));
+        var back = pageNode(pages[c + 2], c + 3);
+        back.style.transform = "rotateY(180deg)";
+        back.style.backfaceVisibility = "hidden";
+        lf.appendChild(back);
+      } else {
+        lf.style.left = "0";
+        lf.style.transformOrigin = "right center";
+        lf.appendChild(pageNode(pages[c], c + 1));
+        var back = pageNode(pages[c - 1], c);
+        back.style.transform = "rotateY(180deg)";
+        back.style.backfaceVisibility = "hidden";
+        lf.appendChild(back);
+      }
+
+      lf.style.transform = "rotateY(0deg)";
+      bk.appendChild(lf);
+      lf.getBoundingClientRect();
+      lf.style.transform = "rotateY(" + (dir > 0 ? -180 : 180) + "deg)";
+
       setTimeout(function () {
         if (closed) return;
         st.idx = n; st.turn = null;
         render();
-      }, 450);
+      }, 820);
     }
 
     function onStageClick(e) {

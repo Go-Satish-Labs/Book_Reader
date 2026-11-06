@@ -22,7 +22,9 @@ function loadMammoth() {
       s.src = "./mammoth.browser.min.js";
       s.onload = () => resolve(globalThis.mammoth);
       s.onerror = () => reject(new Error("Could not load the Word reader."));
-      document.head.appendChild(s);
+      }).catch(function (e) {
+      mammothPromise = null;
+      throw e;
     });
   }
   return mammothPromise;
@@ -34,6 +36,9 @@ function loadPdf() {
     pdfPromise = import("./pdf.min.mjs").then(pdfjs => {
       pdfjs.GlobalWorkerOptions.workerSrc = "./pdf.worker.min.mjs";
       return pdfjs;
+    }).catch(function (e) {
+      pdfPromise = null;
+      throw new Error("PDF reader could not load. Serve the app over HTTP (not file://) and confirm pdf.min.mjs and pdf.worker.min.mjs are present.");
     });
   }
   return pdfPromise;
@@ -76,9 +81,10 @@ export async function extractFile(file, onProgress = () => {}) {
 
   let out = "";
   const pdfPages = [];
+  const dpr = Math.min(globalThis.devicePixelRatio || 1, 2);
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i);
-    const viewport = page.getViewport({ scale: 1.35 });
+    const viewport = page.getViewport({ scale: 2.0 * dpr });
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(viewport.width);
     canvas.height = Math.ceil(viewport.height);
@@ -94,7 +100,7 @@ export async function extractFile(file, onProgress = () => {}) {
     }
     const pageText = line.trim();
     out += pageText + "\n\n";
-    pdfPages.push({ image: canvas.toDataURL("image/jpeg", 0.88), text: pageText });
+    pdfPages.push({ image: canvas.toDataURL("image/png"), text: pageText });
     onProgress(`Reading page ${i} of ${doc.numPages}…`);
   }
   return { title, kind, text: out.replace(/ +\n/g, "\n"), pdfPages };
