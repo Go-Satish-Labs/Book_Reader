@@ -6,25 +6,25 @@
 
   /* ---------- sound rules ---------- */
   var SCENES = {
-    wind: { label: "Open air", sound: "Breeze and moving leaves", rules: [
+    wind: { label: "Open air", sound: "Breeze and moving leaves", asset: "wind", rules: [
       [/\b(breeze|wind|gusts?|howl(?:ed|ing)?|whistl(?:e|ed|ing))\b/g, 1],
       [/grass|leaves?|branches|trees? swaying|valley/g, 0.8]] },
-    rain: { label: "Rainy surroundings", sound: "Gentle rain", rules: [
+    rain: { label: "Rainy surroundings", sound: "Gentle rain", asset: "rain", rules: [
       [/\brain(ed|ing|s|y)?\b/g, 1], [/raindrops?|drizzle|downpour|patter(ed|ing)|droplets?/g, 1.5],
       [/(on|against) the (roof|window|glass|pane|leaves?)/g, 1], [/umbrella|puddles?|soaked|dripping/g, 0.8]] },
-    storm: { label: "Stormy night", sound: "Heavy rain and wind", rules: [
+    storm: { label: "Stormy night", sound: "Heavy rain and wind", asset: "rain", rules: [
       [/\bstorm\b/g, 1.2], [/thunder(ed|clap|ing)?|lightning/g, 1.5],
       [/howl(ed|ing)|gale|shutters rattled|rattled the shutters/g, 1]] },
-    sea: { label: "Seaside", sound: "Ocean waves", rules: [
+    sea: { label: "Seaside", sound: "Ocean waves", asset: "sea", rules: [
       [/\b(sea|ocean|surf|tide|shore|harbou?r|beach)\b/g, 1], [/\bwaves\b/g, 1.2], [/gulls?|salt air/g, 1]] },
-    fire: { label: "By the fire", sound: "Crackling fire", rules: [
+    fire: { label: "By the fire", sound: "Crackling fire", asset: "fire", rules: [
       [/\bhearth\b|campfire|fireplace|embers/g, 1.5], [/crackl(ed|es|ing)|flames?/g, 1], [/dry logs|\bfire\b/g, 0.8]] },
-    forest: { label: "Forest", sound: "Wind through trees", rules: [
+    forest: { label: "Forest", sound: "Wind through trees", asset: "wind", rules: [
       [/forest|\bwoods\b|woodland|canopy/g, 1.3], [/birdsong|birds (were )?singing|\bbirds\b/g, 1.3],
       [/rustl(ed|ing)|brambles|branches/g, 0.7]] },
-    night: { label: "Quiet night", sound: "Crickets", rules: [
+    night: { label: "Quiet night", sound: "Crickets", asset: "night", rules: [
       [/crickets?|cicadas?/g, 2.2], [/long grass|under the stars/g, 0.7]] },
-    stream: { label: "Stream", sound: "Flowing water", rules: [
+    stream: { label: "Stream", sound: "Flowing water", asset: "stream", rules: [
       [/\b(stream|brook|creek|river|waterfall|rapids)\b/g, 1.2], [/\b(trickl\w*|bubbl\w*|gurgl\w*)\b/g, 0.8]] }
     , indoor: { label: "Quiet interior", sound: "Room tone and wood", rules: [
       [/room|house|library|attic|basement|inside|indoors/g, 1], [/floorboards?|clock|window|kettle|paper|book/g, 0.8]] }
@@ -32,7 +32,7 @@
       [/city|street|market|station|traffic|crowd|train|car|restaurant/g, 1], [/horn|conversation|wheels?|engine/g, 0.8]] }
     , farm: { label: "Countryside", sound: "Farm and village ambience", rules: [
       [/farm|barn|stable|village|meadow|horse|cow|sheep|goat|rooster/g, 1], [/wagon|hay|tractor|chicks?/g, 0.8]] }
-    , desert: { label: "Dry open land", sound: "Dry wind and sand", rules: [
+    , desert: { label: "Dry open land", sound: "Dry wind and sand", asset: "wind", rules: [
       [/desert|sand|dunes?|dryland|oasis/g, 1.3], [/dust|camel|scorching|parched/g, 0.8]] }
   };
   var CUES = {
@@ -42,7 +42,7 @@
     steps: { re: /footsteps?|footfalls?|hooves?|walking|ran across|running/g },
     water: { re: /splash(?:ed|ing)?|lapping|pour(?:ed|ing)?|drip(?:ped|ping)?|wading/g },
     crack: { re: /crackling|fireplace|campfire|logs? (?:popped|snapped)|embers?/g },
-    animals: { re: /dog bark|wolf howl|owl hoot|frogs?|cicadas?|bees? buzz|horse neigh|cow moo/g }
+    animals: { re: /\b(?:dog|puppy|cat|kitten|horse|pony|wolf|fox|bear|lion|tiger|cow|calf|bull|sheep|goat|pig|boar|deer|elk|moose|monkey|ape|chimpanzee|gorilla|squirrel|rabbit|mouse|rat|raccoon|otter|elephant|camel|donkey|llama)\b\s+(?:bark(?:ing)?|growl(?:ing)?|whin(?:ny|nying)|neigh(?:ing)?|snort(?:ing)?|whine(?:ing)?|pant(?:ing)?|howl(?:ing)?|yelp(?:ing)?|meow(?:ing)?|purr(?:ing)?|hiss(?:ing)?|roar(?:ing)?|moo(?:ing)?|bleat(?:ing)?|oink(?:ing)?|bray(?:ing)?|trumpet(?:ing)?|grunt(?:ing)?|call(?:ing)?|scream(?:ing)?|chatter(?:ing)?|squeak(?:ing)?|bellow(?:ing)?|bugl(?:e|ing))\b|dog bark|wolf howl|owl hoot|frogs?|cicadas?|bees? buzz/g }
   };
   var NEG = /\b(no|not|nor|never|without|neither|isn't|wasn't|didn't|don't|doesn't|aren't|weren't)\b/;
   var META = /(like|as if|as though|tears|rain check|heart could|a storm of|storm of|memory|metaphor)\W+(\w+\W+){0,3}$/i;
@@ -56,6 +56,8 @@
   var FREE_SOUND_SOURCES = {
     rain: [], wind: [], sea: [], fire: [], night: [], stream: []
   };
+  var SOUND_MANIFEST = "assets/immersive-reading-sounds/sound_manifest.json";
+  var MUSIC_MANIFEST = "assets/immersive-reading-music/music_manifest.json";
 
   /* ---------- storage (localStorage only) ---------- */
   function read(k) {
@@ -207,7 +209,17 @@
       sceneKeys.forEach(function (k) { if (sc[k] > bs) { bs = sc[k]; best = k; } });
       if (bs >= THRESH) { state = best === "rain" && stormy ? "storm" : best; quietRun = 0; }
       else if (++quietRun >= 2) state = null;
-      return { scene: state, stormy: stormy || state === "storm", cues: cues, start: start, length: text.length };
+      var mood = /\b(ghost|haunt|haunted|spirit|grave|cemetery|demon|murder|blood|恐怖|horror|terror|nightmare)\b/i.test(text)
+        ? "Horror"
+        : /\b(suspense|danger|threat|chase|hidden|warning|tension)\b/i.test(text) ? "Suspense"
+        : /\b(mystery|secret|clue|detective|unknown|puzzle)\b/i.test(text) ? "Mystery"
+        : /\b(love|kiss|romance|beloved|heart|wedding)\b/i.test(text) ? "Romance"
+        : /\b(grief|loss|悲しみ|sad|lonely|tears|mourning)\b/i.test(text) ? "Sad"
+        : /\b(magic|fairy|dragon|enchanted|wizard|kingdom)\b/i.test(text) ? "Fantasy"
+        : /\b(forest|river|ocean|birdsong|meadow|mountain|nature)\b/i.test(text) ? "Nature"
+        : /\b(adventure|journey|voyage|quest|explore)\b/i.test(text) ? "Adventure"
+        : /\b(hope|victory|triumph|sunrise|freedom)\b/i.test(text) ? "Hopeful" : "Ambient";
+      return { scene: state, mood: mood, stormy: stormy || state === "storm", cues: cues, context: text, start: start, length: text.length };
     });
     return { pages: pages };
   }
@@ -216,10 +228,10 @@
     var first = head.start, span = (tail.start + tail.length - first) || 1, events = [];
     ids.forEach(function (i) {
       plan.pages[i].cues.forEach(function (c) {
-        events.push({ cue: c.cue, at: c.at, delayMs: 400 + ((c.at - first) / span) * SPREAD_MS });
+        events.push({ cue: c.cue, at: c.at, context: plan.pages[i].context, delayMs: 400 + ((c.at - first) / span) * SPREAD_MS });
       });
     });
-    return { scene: head.scene, stormy: head.stormy, events: events };
+    return { scene: head.scene, mood: head.mood, stormy: head.stormy, events: events };
   }
 
   /* ---------- Web Audio sound engine (synthesised, no audio files) ---------- */
@@ -231,7 +243,8 @@
     this.prefs = prefs;
     this.ctx = null; this.master = null; this.noise = null;
     this.amb = null; this.ambKey = null; this.timers = []; this.fired = {};
-    this.last = null; this.listeners = []; this.status = "Environment: quiet";
+    this.last = null; this.music = null; this.musicKey = null; this.listeners = []; this.status = "Environment: quiet";
+    this.soundManifest = null; this.musicManifest = null;
   }
   SoundEngine.prototype.subscribe = function (fn) {
     var self = this;
@@ -253,16 +266,93 @@
     var ctx = new C(), master = ctx.createGain();
     master.gain.value = this.level();
     master.connect(ctx.destination);
+    this.musicMaster = ctx.createGain();
+    this.musicMaster.gain.value = this.prefs.enabled ? this.prefs.volume * 0.18 : 0;
+    this.musicMaster.connect(master);
     var noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), d = noise.getChannelData(0);
     for (var i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1; // texture only
     this.ctx = ctx; this.master = master; this.noise = noise;
+    this.loadManifests();
+  };
+  SoundEngine.prototype.loadManifests = function () {
+    var self = this;
+    if (global.IB_ASSET_REGISTRY) {
+      this.soundManifest = global.IB_ASSET_REGISTRY.sounds;
+      this.musicManifest = global.IB_ASSET_REGISTRY.music;
+      return Promise.resolve();
+    }
+    if (global.IB_SOUND_MANIFEST && global.IB_MUSIC_MANIFEST) {
+      this.soundManifest = global.IB_SOUND_MANIFEST;
+      this.musicManifest = global.IB_MUSIC_MANIFEST;
+      return Promise.resolve();
+    }
+    if (this.soundManifest && this.musicManifest) return Promise.resolve();
+    return Promise.reject(new Error("Sound catalog is not ready."));
+  };
+  SoundEngine.prototype.assetUrl = function (root, file) {
+    return root + "/" + String(file).replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/");
+  };
+  SoundEngine.prototype.embeddedOr = function (root, file) {
+    var assets = global.IB_SOUND_ASSETS || {}, key = (root.indexOf("music") >= 0 ? "music:" : "sound:") + file;
+    return assets[key] || this.assetUrl(root, file);
+  };
+  SoundEngine.prototype.findSoundEntry = function (cue, context) {
+    var list = this.soundManifest || [], text = String(context || "").toLowerCase();
+    var terms = {
+      thunder: "thunder", door: "door", birds: "bird", steps: "footsteps", water: "water", crack: "crack", animals: "animal"
+    };
+    var term = terms[cue] || cue;
+    var stop = { the: true, a: true, an: true, and: true, of: true, in: true, on: true, through: true, to: true };
+    var best = null, bestScore = 0;
+    var indexed = global.IB_ASSET_REGISTRY && global.IB_ASSET_REGISTRY.soundByCue;
+    if (indexed) {
+      var exact = indexed.get(text.trim());
+      if (exact) return exact;
+    }
+    list.forEach(function (x) {
+      var name = String(x.cue || "").toLowerCase();
+      var animalMatch = cue === "animals" && /\b(?:dog|puppy|cat|horse|wolf|fox|bear|lion|tiger|cow|sheep|goat|pig|deer|monkey|rabbit|mouse|rat|elephant|camel|donkey)\b/i.test(name);
+      if (cue !== "animals" && name.indexOf(term) < 0) return;
+      if (cue === "animals" && !animalMatch) return;
+      var score = text.indexOf(name) >= 0 ? 20 : 0;
+      name.split(/[^a-z0-9]+/).forEach(function (word) {
+        if (word.length > 2 && !stop[word] && text.indexOf(word) >= 0) score += word === term ? 4 : 2;
+      });
+      if (score > bestScore) { best = x; bestScore = score; }
+    });
+    return best;
   };
   SoundEngine.prototype.setPrefs = function (p) {
     this.prefs = Object.assign({}, p);
     write("ib:sound", this.prefs);
     if (this.ctx) this.master.gain.setTargetAtTime(this.level(), this.ctx.currentTime, 0.1);
+    if (this.ctx && this.musicMaster) this.musicMaster.gain.setTargetAtTime(this.prefs.enabled ? this.prefs.volume * 0.18 : 0, this.ctx.currentTime, 0.1);
     if (!this.prefs.enabled) { this.clearTimers(); this.setAmbience(null); this.emit("Intelligent sound is off"); }
     else if (this.last) this.play(this.last.pb, this.last.key);
+  };
+  SoundEngine.prototype.setMusic = function (key) {
+    var self = this, ctx = this.ctx;
+    if (!ctx || !this.musicMaster || !key || key === this.musicKey) return;
+    this.musicKey = key;
+    var category = key === "horror" ? "Horror" : key === "calm" ? "Ambient" : key;
+    this.loadManifests().then(function () {
+      var entry = (self.musicManifest || []).find(function (x) { return x.category === category; }) ||
+        (self.musicManifest || []).find(function (x) { return x.category === "Ambient"; });
+      if (!entry) throw new Error("No background music for " + category);
+      return self.fetchSoundBuffer(self.embeddedOr("assets/immersive-reading-music", entry.file));
+    }).then(function (buf) {
+      if (self.musicKey !== key) return;
+      var gain = ctx.createGain(), node = ctx.createBufferSource();
+      gain.gain.value = 0;
+      gain.connect(self.musicMaster);
+      node.buffer = buf; node.loop = true; node.connect(gain); node.start(0);
+      gain.gain.setTargetAtTime(1, ctx.currentTime, 1.8);
+      if (self.music) {
+        self.music.gain.gain.setTargetAtTime(0, ctx.currentTime, 1.8);
+        setTimeout(function () { self.music.stop(); self.music.gain.disconnect(); }, 6500);
+      }
+      self.music = { gain: gain, stop: function () { node.stop(); } };
+    }).catch(function () { self.emit("Background music unavailable; sound effects remain active"); });
   };
   SoundEngine.prototype.play = function (pb, bookKey) {
     var self = this;
@@ -270,19 +360,29 @@
     this.clearTimers();
     if (!this.prefs.enabled) { this.emit("Intelligent sound is off"); return; }
     if (!this.ctx) { this.emit("Environment: quiet · sound starts when you press START READING"); return; }
+    if (!this.soundManifest || !this.musicManifest) {
+      this.loadManifests().then(function () { self.play(pb, bookKey); }).catch(function () {
+        self.emit("Sound manifests unavailable; local fallback remains active");
+      });
+      return;
+    }
     var k = pb.scene ? (pb.stormy ? "storm" : pb.scene) : null;
     if (k !== this.ambKey) this.setAmbience(k);
+    this.setMusic(pb.mood || "Ambient");
     pb.events.forEach(function (e) {
       var id = bookKey + ":" + e.at + ":" + e.cue;
       if (self.fired[id]) return;
-      self.timers.push(setTimeout(function () { self.fired[id] = true; self.one(e.cue); }, e.delayMs));
+      self.timers.push(setTimeout(function () { self.fired[id] = true; self.one(e.cue, e.context); }, e.delayMs));
     });
-    this.emit(k ? "Environment: " + SCENES[k].label + " · Playing: " + SCENES[k].sound : "Environment: quiet · no sound matched");
+    this.emit(k ? "Environment: " + SCENES[k].label + " · Playing: " + SCENES[k].sound :
+      (pb.events.length ? "Animal and event sounds matched on this page" : "Environment: quiet · no sound matched"));
   };
   SoundEngine.prototype.stop = function () {
     this.clearTimers();
     this.last = null;
     this.setAmbience(null);
+    this.musicKey = null;
+    if (this.music) { try { this.music.stop(); } catch (e) { /* already stopped */ } this.music = null; }
     this.emit("Sound stopped");
   };
   SoundEngine.prototype.clearTimers = function () {
@@ -313,20 +413,18 @@
   };
   SoundEngine.prototype.loadAmbienceBuffer = function (k) {
     var self = this;
-    var name = k === "storm" ? "rain" : k;
-    var attempts = [];
-    var assets = global.IB_SOUND_ASSETS || {};
-    if (assets[name]) attempts.push(function () { return self.fetchSoundBuffer(assets[name]); });
-    attempts.push(function () { return self.fetchSoundBuffer("assets/" + name + ".wav"); });
-    (FREE_SOUND_SOURCES[name] || []).forEach(function (url) {
-      attempts.push(function () { return self.fetchSoundBuffer(url); });
+    var words = {
+      wind: /wind|breeze|leaves|grass|forest|woodland/i, rain: /rain|drizzle|downpour|storm/i,
+      storm: /storm|thunder|rain/i, sea: /ocean|wave|sea|surf|shore/i, fire: /fire|flame|campfire|crackling/i,
+      forest: /forest|woodland|jungle|trees/i, night: /crickets|cicadas|night/i, stream: /stream|river|waterfall|water flowing/i,
+      desert: /desert|sand|dryland|wind/i
+    };
+    return this.loadManifests().then(function () {
+      var re = words[k] || words.wind;
+      var entry = (self.soundManifest || []).find(function (x) { return re.test(String(x.cue || "")); });
+      if (!entry) throw new Error("No ambience asset for " + k);
+      return self.fetchSoundBuffer(self.embeddedOr("assets/immersive-reading-sounds", entry.file));
     });
-    var i = 0;
-    function next() {
-      if (i >= attempts.length) return Promise.reject(new Error("no ambience asset for " + name));
-      return attempts[i++]().catch(function () { return next(); });
-    }
-    return next();
   };
   SoundEngine.prototype.setAmbience = function (k) {
     var self = this;
@@ -420,10 +518,19 @@
       stops.push(function () { n4.stop(); l4.stop(); });
     }
   };
-  SoundEngine.prototype.one = function (cue) {
+  SoundEngine.prototype.one = function (cue, context) {
     if (!this.ctx || !this.master || !this.prefs.enabled) return;
     var ctx = this.ctx, t = ctx.currentTime, out = ctx.createGain();
     out.connect(this.master);
+    var self = this, entry = this.findSoundEntry(cue, context);
+    if (entry) {
+      this.fetchSoundBuffer(this.embeddedOr("assets/immersive-reading-sounds", entry.file)).then(function (buf) {
+        var node = ctx.createBufferSource(), gain = ctx.createGain();
+        node.buffer = buf; gain.gain.value = Math.min(0.45, self.level() * 0.45);
+        node.connect(gain).connect(self.master); node.start(0);
+      }).catch(function () { /* use the existing synthesized cue below */ });
+      return;
+    }
     var env, n, o, i, steps;
     if (cue === "thunder") {
       n = ctx.createBufferSource(); n.buffer = this.noise;

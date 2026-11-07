@@ -5,6 +5,41 @@ const $ = id => document.getElementById(id);
 const home = $("home"), readerRoot = $("reader"), msg = $("msg"), drop = $("drop"), fileInput = $("file");
 let busy = false;
 
+function loadAssetRegistry() {
+  window.setLoader("Preparing sound catalog…", null);
+  return Promise.all([
+    fetch("assets/immersive-reading-sounds/sound_manifest.json").then(response => {
+      if (!response.ok) throw new Error("Could not load the sound catalog.");
+      return response.json();
+    }),
+    fetch("assets/immersive-reading-music/music_manifest.json").then(response => {
+      if (!response.ok) throw new Error("Could not load the music catalog.");
+      return response.json();
+    })
+  ]).then(([sounds, music]) => {
+    const soundByCue = new Map();
+    sounds.forEach(entry => {
+      if (!entry.file || !entry.cue) return;
+      const key = entry.cue.trim().toLowerCase();
+      if (!soundByCue.has(key)) soundByCue.set(key, entry);
+    });
+    const musicByCategory = new Map();
+    music.forEach(entry => {
+      if (!entry.file || !entry.category) return;
+      if (!musicByCategory.has(entry.category)) musicByCategory.set(entry.category, []);
+      musicByCategory.get(entry.category).push(entry);
+    });
+    const registry = { sounds, music, soundByCue, musicByCategory };
+    window.IB_ASSET_REGISTRY = registry;
+    window.IB_SOUND_MANIFEST = sounds;
+    window.IB_MUSIC_MANIFEST = music;
+    window.setLoader(`${sounds.length} sounds and ${music.length} music tracks ready`, 100);
+    return registry;
+  });
+}
+
+window.IB_ASSETS_READY = loadAssetRegistry();
+
 function report(text, isError = false) {
   msg.textContent = text;
   msg.className = "msg" + (isError ? " err" : "");
@@ -29,22 +64,38 @@ async function fetchText(path) {
 
 async function exportBook(book) {
   try {
-    const soundFiles = ["rain", "wind", "sea", "fire", "night", "stream"];
-    const [css, js, sounds] = await Promise.all([
+    const [css, js, soundManifest, musicManifest] = await Promise.all([
       fetchText("app.css"),
       fetchText("reader.js"),
-      Promise.all(soundFiles.map(async name => {
-        const response = await fetch(`assets/${name}.wav`);
-        if (!response.ok) throw new Error(`Could not package ${name} ambience.`);
-        const bytes = new Uint8Array(await response.arrayBuffer());
-        let binary = "";
-        for (let i = 0; i < bytes.length; i += 0x8000) {
-          binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-        }
-        return [name, `data:audio/wav;base64,${btoa(binary)}`];
-      }))
+      fetchText("assets/immersive-reading-sounds/sound_manifest.json").then(JSON.parse),
+      fetchText("assets/immersive-reading-music/music_manifest.json").then(JSON.parse)
     ]);
-    download(new Blob([buildStandaloneHtml(book, css, js, Object.fromEntries(sounds))], { type: "text/html" }), slug(book.title) + ".html");
+    const choose = (list, re) => list.find(item => re.test(item.cue || item.title || ""));
+    const selectedSounds = [
+      choose(soundManifest, /rain|wind|wave|fire|cricket|stream|river/i),
+      choose(soundManifest, /thunder/i),
+      choose(soundManifest, /door/i),
+      choose(soundManifest, /bird/i),
+      choose(soundManifest, /footstep/i),
+      choose(soundManifest, /water/i)
+    ].filter(Boolean);
+    const selectedMusic = [
+      musicManifest.find(item => item.category === "Ambient"),
+      musicManifest.find(item => item.category === "Horror")
+    ].filter(Boolean);
+    const packageAudio = async (root, entries, prefix) => Promise.all(entries.map(async entry => {
+      const response = await fetch(`${root}/${entry.file.split("\\").map(encodeURIComponent).join("/")}`);
+      if (!response.ok) throw new Error(`Could not package ${entry.file}.`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return [`${prefix}:${entry.file}`, `data:audio/mpeg;base64,${btoa(binary)}`];
+    }));
+    const embedded = Object.fromEntries([
+      ...(await packageAudio("assets/immersive-reading-sounds", selectedSounds, "sound")),
+      ...(await packageAudio("assets/immersive-reading-music", selectedMusic, "music"))
+    ]);
+    download(new Blob([buildStandaloneHtml(book, css, js, embedded, { sounds: soundManifest, music: musicManifest })], { type: "text/html" }), slug(book.title) + ".html");
   } catch (e) {
     alert("Export failed: " + e.message + "\nOpen the app through a web server (for example: npm start), not by double-clicking index.html.");
   }

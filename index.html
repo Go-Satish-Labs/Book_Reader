@@ -112,8 +112,13 @@
       };
 
       window.hideLoader = function () {
-        var wait = Math.max(0, 5000 - (Date.now() - shownAt));
-        setTimeout(function () { loader.classList.add("off"); }, wait);
+        var ready = window.IB_ASSETS_READY || Promise.resolve();
+        ready.then(function () {
+          var wait = Math.max(0, 5000 - (Date.now() - shownAt));
+          setTimeout(function () { loader.classList.add("off"); }, wait);
+        }, function (error) {
+          window.setLoader("Audio catalog could not be loaded: " + error.message, 0);
+        });
       };
 
       window.addEventListener("load", window.hideLoader);
