@@ -73,7 +73,7 @@ h2 { font-size:clamp(28px,3.4vw,42px); line-height:1.15; margin:0 0 36px; max-wi
 .drop { border:1.5px dashed var(--mut); padding:44px 24px; text-align:center; background:var(--surf); border-radius:3px; }
 .drop.on { border-color:var(--acc); background:color-mix(in srgb,var(--acc) 8%,var(--surf)); } .drop p { margin:0 0 16px; color:var(--mut); }
 .msg { min-height:1.5em; color:var(--mut); margin-top:14px; } .msg.err { color:#a43a2a; }
-footer { padding:30px 0 50px; color:var(--mut); font-size:14px; border-top:1px solid var(--line); }
+footer { padding:30px 0 50px; color:var(--mut); font-size:14px; border-top:1px solid var(--line); white-space:nowrap; overflow-x:auto; scrollbar-width:thin; }
 #reader { position:fixed; inset:0; background:var(--bg); z-index:20; }
 .muted { color:var(--mut); }
 .btn.sm { padding:6px 12px; font-size:13px; }
